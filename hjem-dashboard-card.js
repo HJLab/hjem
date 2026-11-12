@@ -88,10 +88,12 @@ class HjemDashboardCard extends HTMLElement {
     const r = this._rooms().find((x) => x.id === this._popup) || { name: "", id: this._popup };
     const members = this._members(this._popup);
     const rows = members.map((id) => {
-      const s = this._st(id);
-      let n = (s.attributes.friendly_name || id).replace(new RegExp("^" + r.name + "\\s+", "i"), "");
-      return this._lightRow(id, n.charAt(0).toUpperCase() + n.slice(1));
-    }).join("");
+      const full = (this._st(id).attributes.friendly_name || id).trim();
+      const rest = full.replace(new RegExp("^" + r.name + "\\s+", "i"), "");
+      const n = /^\d+$/.test(rest) ? full : rest;
+      return { id, n: n.charAt(0).toUpperCase() + n.slice(1) };
+    }).sort((a, b) => a.n.localeCompare(b.n, "da", { numeric: true }))
+      .map((x) => this._lightRow(x.id, x.n)).join("");
     return `<div class="ov" data-close="1"><div class="pop" role="dialog" aria-label="${r.name}">
       <div class="ph"><h3>${r.name}</h3><button class="x" data-close="1" aria-label="Luk">✕</button></div>
       ${this._lightRow(this._popup, "Hele rummet", true)}
