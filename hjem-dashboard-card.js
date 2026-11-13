@@ -64,7 +64,7 @@ class HjemDashboardCard extends HTMLElement {
     if (st === "error" && err && !["none", "unknown", "unavailable"].includes(err.state)) sub += ` · ${err.state}`;
     const col = st === "error" ? C.red : busy ? C.amber : st === "unavailable" ? C.muted : C.green;
     return `<h2>Støvsuger</h2>
-    <div class="vac">
+    <div class="vac" data-long="vac">
       <div class="vinfo"><ha-icon icon="mdi:robot-vacuum" style="color:${col}"></ha-icon>
         <span><b>${v.attributes.friendly_name || "Støvsuger"}</b><small style="color:${col}">${sub}</small></span></div>
       <div class="vbtns">
@@ -92,8 +92,102 @@ class HjemDashboardCard extends HTMLElement {
     return m.filter((e) => e.startsWith("light.") && this._st(e));
   }
 
+  _vacIds() {
+    const b = this._vac().replace("vacuum.", "");
+    return Object.keys(this._hass.states).filter((k) => k.split(".")[1].startsWith(b));
+  }
+
+  _vacPopup() {
+    const id = this._vac();
+    const v = this._st(id);
+    if (!v) return "";
+    const b = id.replace("vacuum.", "");
+    const s = (dom, suf) => this._st(`${dom}.${b}_${suf}`);
+    const val = (dom, suf) => { const x = s(dom, suf); return x ? x.state : null; };
+    const STATUS = { charging: "Oplader", charging_complete: "Fuldt opladet", idle: "Venter", cleaning: "Støvsuger",
+      returning_home: "Kører hjem", docking: "Parkerer i docken", paused: "På pause", error: "Fejl",
+      segment_cleaning: "Gør rum rent", zoned_cleaning: "Gør zone rent", spot_cleaning: "Pletrengøring",
+      going_to_target: "Kører til mål", starting: "Starter", charger_disconnected: "Ikke i docken",
+      charging_problem: "Problem med opladning", updating: "Opdaterer", device_offline: "Offline", mapping: "Kortlægger",
+      shutting_down: "Slukker", locked: "Låst", manual_mode: "Manuel styring", remote_control_active: "Fjernstyres" };
+    const ERR = { lidar_blocked: "Laser blokeret", bumper_stuck: "Kofanger sidder fast", wheels_suspended: "Hjul i luften",
+      cliff_sensor_error: "Faldsensor beskidt", main_brush_jammed: "Hovedbørste sidder fast", side_brush_jammed: "Sidebørste sidder fast",
+      wheels_jammed: "Hjul sidder fast", robot_trapped: "Sidder fast", no_dustbin: "Støvbeholder mangler", low_battery: "Lavt batteri",
+      charging_error: "Opladningsfejl", robot_tilted: "Står skævt", filter_blocked: "Filter tilstoppet", return_to_dock_fail: "Kunne ikke finde hjem",
+      wall_sensor_dirty: "Vægsensor beskidt", robot_on_carpet: "Står på tæppe", cannot_cross_carpet: "Kan ikke krydse tæppe" };
+    const FAN = { quiet: "Stille", balanced: "Normal", turbo: "Turbo", max: "Max", gentle: "Blid" };
+    const MODE = { vacuum: "Kun støvsug", vac_and_mop: "Støvsug + mop" };
+    const MOP = { off: "Fra", low: "Lav", medium: "Middel", high: "Høj" };
+    const n = (x, d = 0) => (x == null || isNaN(parseFloat(x)) ? "–" : fmt(parseFloat(x), d));
+    const t = (x) => { const d = new Date(x); return isNaN(d) ? "–" : d.toLocaleString("da-DK", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
+    const chips = (opts, cur, attr, labels) => `<div class="chips">${opts.filter((o) => labels[o]).map((o) =>
+      `<button class="chip ${o === cur ? "on" : ""}" ${attr}="${o}">${labels[o]}</button>`).join("")}</div>`;
+    const wear = (label, suf, total) => {
+      const h = parseFloat(val("sensor", suf));
+      if (isNaN(h)) return "";
+      const p = Math.max(0, Math.min(100, (h / total) * 100));
+      const col = h <= 0 ? C.red : p < 15 ? C.amber : C.green;
+      return `<div class="wear"><div class="wl"><span>${label}</span><small style="color:${col}">${h <= 0 ? "Skift nu" : n(h) + " t tilbage"}</small></div>
+        <div class="bar"><i style="width:${p}%;background:${col}"></i></div></div>`;
+    };
+    const kv = (k, x) => `<div class="kv"><span>${k}</span><b>${x}</b></div>`;
+    const yes = (suf) => val("binary_sensor", suf) === "on";
+
+    const st = val("sensor", "status");
+    const err = val("sensor", "vacuum_error");
+    const bat = val("sensor", "batteri");
+    const mapSel = s("select", "valgt_kort");
+    const mapNo = mapSel ? String(mapSel.state).replace(/\D/g, "") : "";
+    const map = this._st(`image.${b}_map_${mapNo}`) || this._st(`image.${b}_map_0`);
+    const room = val("sensor", "nuvaerende_rum");
+    const dnd = s("switch", "forstyr_ikke");
+    const fanList = v.attributes.fan_speed_list || [];
+    const modeS = s("select", "rengoringstilstand");
+    const mopS = s("select", "moppeintensitet");
+
+    return `<div class="ov" data-close="1"><div class="pop" role="dialog" aria-label="Støvsuger">
+      <div class="ph"><h3>${v.attributes.friendly_name || "Støvsuger"}</h3><button class="x" data-close="1" aria-label="Luk">✕</button></div>
+      <p class="vstat">${STATUS[st] || STATUS[v.state] || v.state}${bat ? ` · batteri ${n(bat)} %` : ""}${room && !["unknown", "unavailable"].includes(room) ? ` · ${room}` : ""}</p>
+      ${err && err !== "none" && !["unknown", "unavailable"].includes(err) ? `<p class="verr">⚠ ${ERR[err] || err}</p>` : ""}
+      ${map && map.attributes.entity_picture ? `<img class="map" src="${map.attributes.entity_picture}" alt="Kort">` : ""}
+      ${mapSel && mapSel.attributes.options.length > 1 ? `<h4>Kort</h4><div class="chips">${mapSel.attributes.options.map((o) =>
+        `<button class="chip ${o === mapSel.state ? "on" : ""}" data-sel="${mapSel.entity_id}" data-opt="${o}">${o.replace("Map", "Kort")}</button>`).join("")}</div>` : ""}
+      ${fanList.length ? `<h4>Sugestyrke</h4>${chips(fanList, v.attributes.fan_speed, "data-fan", FAN)}` : ""}
+      ${modeS ? `<h4>Tilstand</h4><div class="chips">${modeS.attributes.options.filter((o) => MODE[o]).map((o) =>
+        `<button class="chip ${o === modeS.state ? "on" : ""}" data-sel="${modeS.entity_id}" data-opt="${o}">${MODE[o]}</button>`).join("")}</div>` : ""}
+      ${mopS ? `<h4>Vandmængde til mop</h4><div class="chips">${mopS.attributes.options.filter((o) => MOP[o]).map((o) =>
+        `<button class="chip ${o === mopS.state ? "on" : ""}" data-sel="${mopS.entity_id}" data-opt="${o}">${MOP[o]}</button>`).join("")}</div>` : ""}
+      <h4>Seneste rengøring</h4>
+      ${kv("Startet", t(val("sensor", "seneste_rengoring_begyndt")))}
+      ${kv("Afsluttet", t(val("sensor", "seneste_rengoring_afsluttet")))}
+      ${kv("Varighed", n(val("sensor", "rengoringstid")) + " min")}
+      ${kv("Areal", n(val("sensor", "rengoringsareal"), 1) + " m²")}
+      <h4>Vedligehold</h4>
+      ${wear("Hovedbørste", "hovedborste_restlevetid", 300)}
+      ${wear("Sidebørste", "sideborste_restlevetid", 200)}
+      ${wear("Filter", "filter_restlevetid", 150)}
+      ${wear("Sensorer (rengør)", "sensor_resterende_tid", 30)}
+      <h4>Tilbehør og indstillinger</h4>
+      ${kv("Oplader", yes("oplader") ? "Ja" : "Nej")}
+      ${kv("Gør rent lige nu", yes("gor_rent") ? "Ja" : "Nej")}
+      ${kv("Sugestyrke", FAN[v.attributes.fan_speed] || v.attributes.fan_speed || "–")}
+      ${kv("Vandbeholder", yes("vandbeholder_monteret") ? "Monteret" : "Ikke monteret")}
+      ${kv("Moppe", yes("moppe_monteret") ? "Monteret" : "Ikke monteret")}
+      ${yes("vandmangel") ? kv("Vand", `<span style="color:${C.red}">Mangler vand</span>`) : ""}
+      ${dnd ? `<div class="kv"><span>Forstyr ikke ${val("time", "do_not_disturb_begin") ? `(${val("time", "do_not_disturb_begin").slice(0, 5)}–${(val("time", "do_not_disturb_end") || "").slice(0, 5)})` : ""}</span>
+        <button class="sw ${dnd.state === "on" ? "on" : ""}" data-sw="${dnd.entity_id}" aria-label="Forstyr ikke"></button></div>` : ""}
+      ${s("number", "lydstyrke") ? `<div class="kv"><span>Lydstyrke</span><b>${n(val("number", "lydstyrke"))} %</b></div>
+        <input class="vol" type="range" min="0" max="100" step="5" value="${n(val("number", "lydstyrke"))}" data-num="number.${b}_lydstyrke" aria-label="Lydstyrke">` : ""}
+      <h4>I alt</h4>
+      ${kv("Rengøringer", n(val("sensor", "samlet_antal_rengoringer")))}
+      ${kv("Tid", n(val("sensor", "samlet_rengoringstid")) + " timer")}
+      ${kv("Areal", n(val("sensor", "samlet_rengoringsareal")) + " m²")}
+    </div></div>`;
+  }
+
   _popupKey() {
     if (!this._popup) return "";
+    if (this._popup === "vac") return this._vacIds().map((id) => this._st(id).state + (this._st(id).attributes.fan_speed || "")).join(",");
     return [this._popup, ...this._members(this._popup)].map((id) => {
       const s = this._st(id); return s ? s.state + (s.attributes.brightness || "") : "-";
     }).join(",");
@@ -116,6 +210,7 @@ class HjemDashboardCard extends HTMLElement {
 
   _popupHtml() {
     if (!this._popup) return "";
+    if (this._popup === "vac") return this._vacPopup();
     const r = this._rooms().find((x) => x.id === this._popup) || { name: "", id: this._popup };
     const members = this._members(this._popup);
     const rows = members.map((id) => {
@@ -180,17 +275,21 @@ class HjemDashboardCard extends HTMLElement {
       this.attachShadow({ mode: "open" });
       const sr = this.shadowRoot;
       sr.addEventListener("click", (e) => this._click(e));
-      sr.addEventListener("contextmenu", (e) => { if (e.target.closest(".room")) e.preventDefault(); });
+      sr.addEventListener("contextmenu", (e) => { if (e.target.closest(".room,.vac")) e.preventDefault(); });
       sr.addEventListener("pointerdown", (e) => {
-        const room = e.target.closest(".room");
+        const room = e.target.closest(".room,[data-long]");
         if (!room) return;
         this._longFired = false;
         clearTimeout(this._lp);
-        this._lp = setTimeout(() => { this._longFired = true; this._popup = room.dataset.toggle; this._render(); }, 600);
+        this._lp = setTimeout(() => { this._longFired = true; this._popup = room.dataset.long || room.dataset.toggle; this._render(); }, 600);
       });
       ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => sr.addEventListener(ev, () => clearTimeout(this._lp)));
-      sr.addEventListener("input", (e) => { if (e.target.dataset.dim) this._dragging = true; });
+      sr.addEventListener("input", (e) => { if (e.target.dataset.dim || e.target.dataset.num) this._dragging = true; });
       sr.addEventListener("change", (e) => {
+        if (e.target.dataset.num) {
+          this._dragging = false;
+          return this._hass.callService("number", "set_value", { entity_id: e.target.dataset.num, value: Number(e.target.value) });
+        }
         const id = e.target.dataset.dim;
         if (!id) return;
         this._dragging = false;
@@ -312,6 +411,18 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .vinfo b { display:block; font-weight:600; font-size:16px; } .vinfo small { display:block; font-size:13px; margin-top:2px; }
 .vbtns { display:flex; flex-wrap:wrap; gap:8px; }
 .act[disabled] { opacity:.45; cursor:default; }
+.vac { user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+.pop h4 { font-size:12px; color:${C.muted}; text-transform:uppercase; letter-spacing:.04em; margin:18px 0 8px; font-weight:600; }
+.vstat { margin:0; color:${C.green}; font-weight:600; } .verr { margin:6px 0 0; color:${C.red}; font-weight:600; }
+.map { display:block; width:100%; margin-top:14px; border-radius:12px; background:${C.surface}; border:1px solid ${C.line}; }
+.vol { width:100%; accent-color:${C.amber}; height:28px; }
+.chips { display:flex; flex-wrap:wrap; gap:6px; }
+.chip { background:#173650; border:1px solid ${C.line}; border-radius:999px; padding:7px 12px; font-size:13px; font-weight:600; }
+.chip.on { background:${C.amberBg}; border-color:${C.amber}; color:${C.amber}; }
+.kv { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:7px 0; border-top:1px solid ${C.line}; font-size:14px; }
+.kv span { color:${C.muted}; } .kv b { font-weight:600; text-align:right; }
+.wear { padding:6px 0; } .wl { display:flex; justify-content:space-between; font-size:14px; margin-bottom:5px; } .wl small { font-size:13px; font-weight:600; }
+.bar { height:6px; border-radius:99px; background:#1c3a54; overflow:hidden; } .bar i { display:block; height:100%; border-radius:99px; }
 @media (max-width:600px) {
   .vac { padding:12px; margin-bottom:20px; } .vbtns { width:100%; } .vbtns .act { flex:1; justify-content:center; padding:9px 8px; }
   .wrap { padding:16px 12px 28px; }
@@ -366,7 +477,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
     <button class="act" data-action="skrald"><ha-icon icon="mdi:trash-can-outline"></ha-icon>Skraldespand</button>
     <button class="act ${ferieOn ? "active" : ""}" data-action="ferie"><ha-icon icon="mdi:palm-tree"></ha-icon>Feriemodus ${ferieOn ? "til" : "fra"}</button>
   </div>
-  <div class="foot">Tryk på et rum for at tænde eller slukke. Hold et rum nede for lysstyrke og de enkelte lamper.</div>
+  <div class="foot">Tryk på et rum for at tænde eller slukke. Hold et rum nede for lysstyrke og de enkelte lamper. Hold støvsugeren nede for kort, indstillinger og vedligehold.</div>
 </div></div>${this._popupHtml()}`;
   }
 
@@ -378,6 +489,9 @@ button { font:inherit; color:inherit; cursor:pointer; }
     const call = (d, s, data) => this._hass.callService(d, s, data);
     if (t.dataset.toggle) return call("light", "toggle", { entity_id: t.dataset.toggle });
     if (t.dataset.vac) return call("vacuum", t.dataset.vac, { entity_id: this._vac() });
+    if (t.dataset.fan) return call("vacuum", "set_fan_speed", { entity_id: this._vac(), fan_speed: t.dataset.fan });
+    if (t.dataset.sel) return call("select", "select_option", { entity_id: t.dataset.sel, option: t.dataset.opt });
+    if (t.dataset.sw) return call("switch", "toggle", { entity_id: t.dataset.sw });
     switch (t.dataset.action) {
       case "alt_sluk":
         if (confirm("Sluk alt lys i huset?")) call("light", "turn_off", { entity_id: "all" });
