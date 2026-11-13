@@ -101,6 +101,41 @@ class HjemDashboardCard extends HTMLElement {
     </div></div>`;
   }
 
+  _isEvening(d) { const h = d.getHours(); return h >= 18 || h < 3; }
+
+  // Første hverdag efter aftenuret, på det faste morgen-klokkeslæt
+  _nextWeekday(after, hm) {
+    const d = new Date(after);
+    d.setHours(hm[0], hm[1], 0, 0);
+    do { d.setDate(d.getDate() + 1); } while (d.getDay() === 0 || d.getDay() === 6);
+    return d;
+  }
+
+  // Find det faste hverdags-vækkeur ud fra de sidste 10 dages historik (første morgen-alarm pr. hverdag)
+  async _loadMorning() {
+    if (this._morningBusy || (this._morningAt && Date.now() - this._morningAt < 3600e3)) return;
+    this._morningBusy = true;
+    try {
+      const start = new Date(Date.now() - 10 * 864e5).toISOString();
+      const r = await this._hass.callWS({ type: "history/history_during_period", start_time: start,
+        entity_ids: ["sensor.naeste_vaekkeur"], minimal_response: true, no_attributes: true });
+      const first = {};
+      for (const x of r["sensor.naeste_vaekkeur"] || []) {
+        const d = new Date(x.s);
+        if (isNaN(d) || this._isEvening(d) || d.getHours() > 10 || d.getDay() === 0 || d.getDay() === 6) continue;
+        const k = d.toDateString();
+        if (!first[k] || d < first[k]) first[k] = d;
+      }
+      const count = {};
+      Object.values(first).forEach((d) => { const k = d.getHours() + ":" + d.getMinutes(); count[k] = (count[k] || 0) + 1; });
+      const best = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+      this._morning = best ? best[0].split(":").map(Number) : null;
+      this._morningAt = Date.now();
+      this._render();
+    } catch (e) { /* prøv igen ved næste opdatering */ }
+    this._morningBusy = false;
+  }
+
   _priceLevel(p) {
     if (p == null || isNaN(p)) return { col: C.muted, bg: C.surface, line: C.line, txt: "Ukendt" };
     if (p < 2) return { col: C.green, bg: C.greenBg, line: C.green, txt: "Billig" };
@@ -153,14 +188,24 @@ class HjemDashboardCard extends HTMLElement {
 
     const vk = this._st("sensor.naeste_vaekkeur");
     let vkTxt = "Intet sat", vkSub = "Morgenlys starter ved vækkeuret";
+    const dayName = (d) => {
+      const tom = new Date(now); tom.setDate(now.getDate() + 1);
+      return d.toDateString() === now.toDateString() ? "I dag"
+        : d.toDateString() === tom.toDateString() ? "I morgen"
+        : d.toLocaleDateString("da-DK", { weekday: "long" });
+    };
     if (vk && !["unknown", "unavailable", ""].includes(vk.state)) {
-      const d = new Date(vk.state);
-      if (!isNaN(d)) {
+      let d = new Date(vk.state);
+      if (!isNaN(d) && this._isEvening(d)) {
+        // Aftenure (fx 22:00 nattilstand) ignoreres – vis det faste hverdags-vækkeur i stedet
+        this._loadMorning();
+        d = this._morning ? this._nextWeekday(d, this._morning) : null;
+      }
+      if (d && !isNaN(d)) {
         vkTxt = d.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
-        const same = d.toDateString() === now.toDateString();
-        const tom = new Date(now); tom.setDate(now.getDate() + 1);
-        const dayTxt = same ? "I dag" : d.toDateString() === tom.toDateString() ? "I morgen" : d.toLocaleDateString("da-DK", { weekday: "long" });
-        vkSub = `${dayTxt} · morgenlys 40 % → 50 %`;
+        vkSub = `${dayName(d)}<span class="long"> · morgenlys 40 % → 50 %</span>`;
+      } else if (d === null) {
+        vkTxt = "–"; vkSub = this._morningAt ? "Intet hverdags-vækkeur fundet" : "Henter …";
       }
     }
 
@@ -229,6 +274,22 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .sw { width:46px; height:26px; border-radius:999px; background:#1c3a54; border:1px solid ${C.line}; position:relative; }
 .sw::after { content:""; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:${C.muted}; transition:left .15s; }
 .sw.on { background:${C.amberBg}; border-color:${C.amber}; } .sw.on::after { left:23px; background:${C.amber}; }
+@media (max-width:600px) {
+  .wrap { padding:16px 12px 28px; }
+  .top { margin-bottom:14px; }
+  h1 { font-size:22px; } .date { font-size:13px; }
+  .cards { grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-bottom:18px; }
+  .card { padding:10px; border-radius:12px; box-shadow:none; min-width:0; }
+  .lbl { font-size:10.5px; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .val { font-size:19px; gap:4px; white-space:nowrap; }
+  .val ha-icon { --mdc-icon-size:18px; }
+  .sub { font-size:11.5px; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .long { display:none; }
+  .rooms { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:20px; }
+  .room { padding:12px; gap:10px; }
+  .room b { font-size:15px; }
+  .act { padding:9px 14px; font-size:14px; }
+}
 </style>
 <div class="wrap"><div class="inner">
   <div class="top">
@@ -240,7 +301,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
     <div class="card" style="background:${lvl.bg};border-color:${lvl.line}">
       <p class="lbl">Elpris nu</p>
       <p class="val" style="color:${lvl.col}">${isNaN(price) ? "–" : fmt(price) + " kr."}</p>
-      <p class="sub">${lvl.txt} · inkl. moms, tariffer og afgifter${peak ? " · spidslast 17–21" : ""}</p>
+      <p class="sub">${lvl.txt}<span class="long"> · inkl. moms, tariffer og afgifter${peak ? " · spidslast 17–21" : ""}</span></p>
     </div>
     <div class="card">
       <p class="lbl">Ude</p>
@@ -248,7 +309,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
       <p class="sub">${WEATHER[wState] || "Vejr ukendt"}</p>
     </div>
     <div class="card">
-      <p class="lbl">Næste vækkeur</p>
+      <p class="lbl"><span class="long">Næste </span>vækkeur</p>
       <p class="val">${vkTxt}</p>
       <p class="sub">${vkSub}</p>
     </div>
