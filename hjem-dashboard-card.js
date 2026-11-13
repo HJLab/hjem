@@ -46,10 +46,41 @@ class HjemDashboardCard extends HTMLElement {
   }
 
   _rooms() { return (this._config && this._config.rooms) || ROOMS; }
+  _vac() { return (this._config && this._config.vacuum) || "vacuum.roborock_s5_max"; }
+
+  _vacHtml() {
+    const id = this._vac();
+    const v = this._st(id);
+    if (!v) return "";
+    const base = id.replace("vacuum.", "sensor.");
+    const bat = this._st(base + "_batteri");
+    const err = this._st(base + "_vacuum_error");
+    const TXT = { docked: "I docken", cleaning: "Støvsuger", returning: "Kører hjem", paused: "På pause",
+      idle: "Venter", error: "Fejl", unavailable: "Ikke tilgængelig", unknown: "Ukendt" };
+    const st = v.state;
+    const busy = st === "cleaning" || st === "returning";
+    let sub = TXT[st] || st;
+    if (bat && !isNaN(parseFloat(bat.state))) sub += ` · batteri ${Math.round(bat.state)} %`;
+    if (st === "error" && err && !["none", "unknown", "unavailable"].includes(err.state)) sub += ` · ${err.state}`;
+    const col = st === "error" ? C.red : busy ? C.amber : st === "unavailable" ? C.muted : C.green;
+    return `<h2>Støvsuger</h2>
+    <div class="vac">
+      <div class="vinfo"><ha-icon icon="mdi:robot-vacuum" style="color:${col}"></ha-icon>
+        <span><b>${v.attributes.friendly_name || "Støvsuger"}</b><small style="color:${col}">${sub}</small></span></div>
+      <div class="vbtns">
+        ${st === "cleaning"
+          ? `<button class="act" data-vac="pause"><ha-icon icon="mdi:pause"></ha-icon>Pause</button>`
+          : `<button class="act" data-vac="start"><ha-icon icon="mdi:play"></ha-icon>${st === "paused" ? "Fortsæt" : "Start"}</button>`}
+        <button class="act" data-vac="return_to_base" ${st === "docked" ? "disabled" : ""}><ha-icon icon="mdi:home-import-outline"></ha-icon>Hjem</button>
+        <button class="act" data-vac="locate"><ha-icon icon="mdi:map-marker-radius"></ha-icon>Find</button>
+      </div>
+    </div>`;
+  }
 
   _stateKey() {
     const ids = [...this._rooms().map((r) => r.id), "sensor.elpris_total", "sensor.hue_outdoor_motion_sensor_1_temperatur",
-      "weather.forecast_hjem", "sensor.naeste_vaekkeur", "input_boolean.feriemodus", "device_tracker.hennings_mobil"];
+      "weather.forecast_hjem", "sensor.naeste_vaekkeur", "input_boolean.feriemodus", "device_tracker.hennings_mobil",
+      this._vac(), this._vac().replace("vacuum.", "sensor.") + "_batteri", this._vac().replace("vacuum.", "sensor.") + "_vacuum_error"];
     return ids.map((id) => { const s = this._hass.states[id]; return s ? s.state + (s.attributes.brightness || "") : "-"; }).join("|");
   }
 
@@ -274,7 +305,15 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .sw { width:46px; height:26px; border-radius:999px; background:#1c3a54; border:1px solid ${C.line}; position:relative; }
 .sw::after { content:""; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:${C.muted}; transition:left .15s; }
 .sw.on { background:${C.amberBg}; border-color:${C.amber}; } .sw.on::after { left:23px; background:${C.amber}; }
+.vac { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; background:${C.surface2};
+  border:1px solid ${C.line}; border-radius:14px; padding:14px 16px; margin-bottom:28px; }
+.vinfo { display:flex; align-items:center; gap:12px; }
+.vinfo ha-icon { --mdc-icon-size:28px; flex:none; }
+.vinfo b { display:block; font-weight:600; font-size:16px; } .vinfo small { display:block; font-size:13px; margin-top:2px; }
+.vbtns { display:flex; flex-wrap:wrap; gap:8px; }
+.act[disabled] { opacity:.45; cursor:default; }
 @media (max-width:600px) {
+  .vac { padding:12px; margin-bottom:20px; } .vbtns { width:100%; } .vbtns .act { flex:1; justify-content:center; padding:9px 8px; }
   .wrap { padding:16px 12px 28px; }
   .top { margin-bottom:14px; }
   h1 { font-size:22px; } .date { font-size:13px; }
@@ -318,6 +357,8 @@ button { font:inherit; color:inherit; cursor:pointer; }
   <h2>Rum</h2>
   <div class="rooms">${rooms}</div>
 
+  ${this._vacHtml()}
+
   <h2>Hurtige knapper</h2>
   <div class="actions">
     <button class="act" data-action="alt_sluk"><ha-icon icon="mdi:power"></ha-icon>Sluk alt lys</button>
@@ -336,6 +377,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
     if (!t || !this._hass) return;
     const call = (d, s, data) => this._hass.callService(d, s, data);
     if (t.dataset.toggle) return call("light", "toggle", { entity_id: t.dataset.toggle });
+    if (t.dataset.vac) return call("vacuum", t.dataset.vac, { entity_id: this._vac() });
     switch (t.dataset.action) {
       case "alt_sluk":
         if (confirm("Sluk alt lys i huset?")) call("light", "turn_off", { entity_id: "all" });
