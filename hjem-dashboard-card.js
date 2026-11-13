@@ -62,6 +62,9 @@ class HjemDashboardCard extends HTMLElement {
     let sub = TXT[st] || st;
     if (bat && !isNaN(parseFloat(bat.state))) sub += ` · batteri ${Math.round(bat.state)} %`;
     if (st === "error" && err && !["none", "unknown", "unavailable"].includes(err.state)) sub += ` · ${err.state}`;
+    this._loadVacPlan();
+    const nxt = this._nextPlanned();
+    if (nxt && !busy) sub += ` · næste ${this._whenTxt(nxt)}`;
     const col = st === "error" ? C.red : busy ? C.amber : st === "unavailable" ? C.muted : C.green;
     return `<h2>Støvsuger</h2>
     <div class="vac" data-long="vac">
@@ -90,6 +93,60 @@ class HjemDashboardCard extends HTMLElement {
     const s = this._st(id);
     const m = (s && s.attributes.entity_id) || [];
     return m.filter((e) => e.startsWith("light.") && this._st(e));
+  }
+
+  // Henter støvsugerens egne kørselsdata (clean_summary.records) via HA-diagnose og udleder tidsplanen
+  async _loadVacPlan() {
+    if (this._planBusy || (this._planAt && Date.now() - this._planAt < 1800e3)) return;
+    this._planBusy = true;
+    try {
+      const reg = await this._hass.callWS({ type: "config/entity_registry/get", entity_id: this._vac() });
+      const sig = await this._hass.callWS({ type: "auth/sign_path", path: `/api/diagnostics/config_entry/${reg.config_entry_id}` });
+      const j = await (await fetch(sig.path)).json();
+      const co = Object.values((j.data && j.data.coordinators) || {})[0] || {};
+      const recs = ((co.traits && co.traits.clean_summary && co.traits.clean_summary.records) || [])
+        .map((s) => new Date(s * 1000)).sort((a, b) => b - a);
+      const count = {};
+      recs.forEach((d) => { const k = d.getDay() + "|" + d.getHours() + "|" + d.getMinutes(); count[k] = (count[k] || 0) + 1; });
+      const slots = Object.entries(count).filter(([, c]) => c >= 3)
+        .map(([k]) => k.split("|").map(Number)).sort((a, b) => ((a[0] + 6) % 7) - ((b[0] + 6) % 7) || a[1] - b[1]);
+      this._plan = { recs, slots };
+      this._planAt = Date.now();
+      this._lastKey = null;
+      this._render();
+    } catch (e) { this._plan = this._plan || { recs: [], slots: [], err: true }; }
+    this._planBusy = false;
+  }
+
+  _nextPlanned() {
+    const p = this._plan;
+    if (!p || !p.slots.length) return null;
+    const now = new Date();
+    let best = null;
+    for (const [wd, h, m] of p.slots) {
+      const d = new Date(now); d.setHours(h, m, 0, 0);
+      d.setDate(d.getDate() + ((wd - d.getDay() + 7) % 7));
+      if (d <= now) d.setDate(d.getDate() + 7);
+      if (!best || d < best) best = d;
+    }
+    return best;
+  }
+
+  _planTxt() {
+    const p = this._plan;
+    if (!p || !p.slots.length) return "";
+    const DAYS = ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"];
+    const byTime = {};
+    p.slots.forEach(([wd, h, m]) => { const t = String(h).padStart(2, "0") + "." + String(m).padStart(2, "0"); (byTime[t] = byTime[t] || []).push(DAYS[wd]); });
+    return Object.entries(byTime).map(([t, ds]) => (ds.length > 1 ? ds.slice(0, -1).join(", ") + " og " + ds.slice(-1) : ds[0]) + " kl. " + t).join(" · ");
+  }
+
+  _whenTxt(d) {
+    const now = new Date();
+    const tom = new Date(now); tom.setDate(now.getDate() + 1);
+    const day = d.toDateString() === now.toDateString() ? "i dag" : d.toDateString() === tom.toDateString() ? "i morgen"
+      : d.toLocaleDateString("da-DK", { weekday: "long" });
+    return day + " kl. " + d.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
   }
 
   _vacIds() {
@@ -149,6 +206,10 @@ class HjemDashboardCard extends HTMLElement {
       <div class="ph"><h3>${v.attributes.friendly_name || "Støvsuger"}</h3><button class="x" data-close="1" aria-label="Luk">✕</button></div>
       <p class="vstat">${STATUS[st] || STATUS[v.state] || v.state}${bat ? ` · batteri ${n(bat)} %` : ""}${room && !["unknown", "unavailable"].includes(room) ? ` · ${room}` : ""}</p>
       ${err && err !== "none" && !["unknown", "unavailable"].includes(err) ? `<p class="verr">⚠ ${ERR[err] || err}</p>` : ""}
+      <h4>Tidsplan</h4>
+      ${this._plan && this._plan.slots.length
+        ? kv("Kører fast", this._planTxt()) + kv("Næste gang", this._whenTxt(this._nextPlanned()))
+        : `<p class="note">${this._plan ? "Ingen fast tidsplan fundet i de seneste kørsler." : "Henter …"}</p>`}
       ${map && map.attributes.entity_picture ? `<img class="map" src="${map.attributes.entity_picture}" alt="Kort">` : ""}
       ${mapSel && mapSel.attributes.options.length > 1 ? `<h4>Kort</h4><div class="chips">${mapSel.attributes.options.map((o) =>
         `<button class="chip ${o === mapSel.state ? "on" : ""}" data-sel="${mapSel.entity_id}" data-opt="${o}">${o.replace("Map", "Kort")}</button>`).join("")}</div>` : ""}
@@ -162,6 +223,10 @@ class HjemDashboardCard extends HTMLElement {
       ${kv("Afsluttet", t(val("sensor", "seneste_rengoring_afsluttet")))}
       ${kv("Varighed", n(val("sensor", "rengoringstid")) + " min")}
       ${kv("Areal", n(val("sensor", "rengoringsareal"), 1) + " m²")}
+      ${this._plan && this._plan.recs.length ? `<h4>Seneste kørsler</h4><div class="runs">${this._plan.recs.slice(0, 12).map((d) => {
+        const fast = this._plan.slots.some(([wd, h, m]) => d.getDay() === wd && d.getHours() === h && d.getMinutes() === m);
+        return `<span class="${fast ? "fast" : ""}">${d.toLocaleString("da-DK", { weekday: "short", day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" })}</span>`;
+      }).join("")}</div><p class="note">Gul = efter tidsplanen · hvid = startet manuelt</p>` : ""}
       <h4>Vedligehold</h4>
       ${wear("Hovedbørste", "hovedborste_restlevetid", 300)}
       ${wear("Sidebørste", "sideborste_restlevetid", 200)}
@@ -415,6 +480,9 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .pop h4 { font-size:12px; color:${C.muted}; text-transform:uppercase; letter-spacing:.04em; margin:18px 0 8px; font-weight:600; }
 .vstat { margin:0; color:${C.green}; font-weight:600; } .verr { margin:6px 0 0; color:${C.red}; font-weight:600; }
 .map { display:block; width:100%; margin-top:14px; border-radius:12px; background:${C.surface}; border:1px solid ${C.line}; }
+.note { color:${C.muted}; font-size:12px; margin:6px 0 0; }
+.runs { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 12px; font-size:13px; }
+.runs span { padding:3px 0; } .runs .fast { color:${C.amber}; }
 .vol { width:100%; accent-color:${C.amber}; height:28px; }
 .chips { display:flex; flex-wrap:wrap; gap:6px; }
 .chip { background:#173650; border:1px solid ${C.line}; border-radius:999px; padding:7px 12px; font-size:13px; font-weight:600; }
