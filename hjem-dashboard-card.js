@@ -116,7 +116,7 @@ class HjemDashboardCard extends HTMLElement {
     const fav = Object.entries((this._st("sensor.sonos_favorites") || { attributes: {} }).attributes.items || {});
     const favHtml = fav.length ? `<div class="chips favs">${fav.map(([id, t]) =>
       `<button class="chip" data-fav="${id}" data-ent="${main}">${t}</button>`).join("")}</div>` : "";
-    return `<h2>Musik</h2>${np}<div class="chips favs"><button class="act pick" data-action="musik"><ha-icon icon="mdi:magnify"></ha-icon>Vælg musik</button></div>${favHtml}<div class="spks">${tiles}</div>`;
+    return `<h2>Musik</h2>${np}<div class="chips favs"><button class="act pick" data-action="musik"><ha-icon icon="mdi:magnify"></ha-icon>Vælg musik</button><button class="act pick" data-action="favs"><ha-icon icon="mdi:heart"></ha-icon>Favoritter</button></div>${favHtml}<div class="spks">${tiles}</div>`;
   }
 
   // Henter danske radiostationer fra Home Assistants radioliste (én gang pr. 12 timer)
@@ -139,10 +139,33 @@ class HjemDashboardCard extends HTMLElement {
     this._radioBusy = false;
   }
 
+  // Egne musikfavoritter gemmes i Home Assistant pr. bruger (samme på telefon og pc)
+  async _loadMyFav() {
+    if (this._myFavLoaded || this._myFavBusy) return;
+    this._myFavBusy = true;
+    try {
+      const r = await this._hass.callWS({ type: "frontend/get_user_data", key: "hjem_musik_favoritter" });
+      this._myFav = (r && Array.isArray(r.value)) ? r.value : [];
+    } catch (e) { this._myFav = []; }
+    this._myFavLoaded = true; this._myFavBusy = false;
+    this._lastKey = null; this._render();
+  }
+
+  _toggleMyFav(id, t, img) {
+    const f = [...(this._myFav || [])];
+    const i = f.findIndex((x) => x.id === id);
+    if (i >= 0) f.splice(i, 1); else f.push({ id, t, img });
+    this._myFav = f;
+    this._hass.callWS({ type: "frontend/set_user_data", key: "hjem_musik_favoritter", value: f }).catch(() => {});
+    this._render();
+  }
+
   _musicPopup() {
     const sp = this._speakers();
     if (!sp.length) return "";
-    this._loadRadio();
+    const favMode = this._mMode === "fav";
+    if (!favMode) this._loadRadio();
+    this._loadMyFav();
     const coords = [...new Set(sp.map((x) => this._coord(x.id)))];
     const label = (c) => sp.filter((x) => this._coord(x.id) === c).map((x) => x.name).join(" + ") || c;
     if (!this._mTarget || !coords.includes(this._mTarget))
@@ -151,27 +174,36 @@ class HjemDashboardCard extends HTMLElement {
     const hide = (t) => (q && !t.toLowerCase().includes(q) ? ' style="display:none"' : "");
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     const fav = Object.entries((this._st("sensor.sonos_favorites") || { attributes: {} }).attributes.items || {});
-    const item = (kind, id, t, img) => `<button class="mi" data-play="${esc(id)}" data-kind="${kind}" data-t="${esc(t.toLowerCase())}"${hide(t)}>
+    const mine = this._myFav || [];
+    const isMine = (id) => mine.some((x) => x.id === id);
+    const item = (kind, id, t, img) => `<div class="mrow" data-t="${esc(t.toLowerCase())}"${favMode ? "" : hide(t)}>
+      <button class="mi" data-play="${esc(id)}" data-kind="${kind}">
       ${img ? `<img src="${esc(img)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : `<span class="mii"><ha-icon icon="mdi:${kind === "fav" ? "heart" : "radio"}"></ha-icon></span>`}
-      <span>${esc(t)}</span><ha-icon class="pl" icon="mdi:play"></ha-icon></button>`;
-    return `<div class="ov" data-close="1"><div class="pop mpop" role="dialog" aria-label="Vælg musik">
-      <div class="ph"><h3>Vælg musik</h3><button class="x" data-close="1" aria-label="Luk">✕</button></div>
+      <span>${esc(t)}</span><ha-icon class="pl" icon="mdi:play"></ha-icon></button>
+      ${kind === "fav" ? "" : `<button class="hrt ${isMine(id) ? "on" : ""}" data-favtoggle="${esc(id)}" data-ft="${esc(t)}" data-fimg="${esc(img)}" aria-label="${isMine(id) ? "Fjern fra favoritter" : "Føj til favoritter"}"><ha-icon icon="mdi:${isMine(id) ? "heart" : "heart-outline"}"></ha-icon></button>`}
+    </div>`;
+    const mineHtml = mine.length ? `<div class="ml">${mine.map((m) => item("my", m.id, m.t, m.img)).join("")}</div>`
+      : `<p class="note">${favMode ? "Ingen favoritter endnu. Åbn Vælg musik og tryk på hjertet ved en radiokanal for at gemme den her." : "Tryk på hjertet ved en kanal nedenfor for at gemme den som favorit."}</p>`;
+    return `<div class="ov" data-close="1"><div class="pop mpop" role="dialog" aria-label="${favMode ? "Favoritter" : "Vælg musik"}">
+      <div class="ph"><h3>${favMode ? "Favoritter" : "Vælg musik"}</h3><button class="x" data-close="1" aria-label="Luk">✕</button></div>
       <h4 style="margin-top:0">Spil i</h4>
       <div class="chips">${coords.map((c) => `<button class="chip ${c === this._mTarget ? "on" : ""}" data-mtarget="${c}">${label(c)}</button>`).join("")}</div>
-      <input class="srch" type="search" placeholder="Søg i favoritter og radio …" value="${esc(this._q || "")}" data-search="1" aria-label="Søg">
-      <h4>Sonos-favoritter</h4>
-      ${fav.length ? `<div class="ml">${fav.map(([id, t]) => item("fav", id, t, "")).join("")}</div>`
-        : `<p class="note">Ingen endnu. Tryk på hjertet ved en spilleliste, et album eller en station i Sonos-appen – så dukker den op her (også fra YouSee Musik).</p>`}
+      ${favMode ? "" : `<input class="srch" type="search" placeholder="Søg i favoritter og radio …" value="${esc(this._q || "")}" data-search="1" aria-label="Søg">`}
+      <h4>Mine favoritter</h4>
+      ${mineHtml}
+      ${fav.length ? `<h4>Sonos-favoritter</h4><div class="ml">${fav.map(([id, t]) => item("fav", id, t, "")).join("")}</div>`
+        : favMode ? "" : `<h4>Sonos-favoritter</h4><p class="note">Ingen endnu. Tryk på hjertet ved en spilleliste, et album eller en station i Sonos-appen – så dukker den op her (også fra YouSee Musik).</p>`}
+      ${favMode ? `<div class="chips favs" style="margin-top:16px"><button class="act" data-action="musik"><ha-icon icon="mdi:magnify"></ha-icon>Find flere i Vælg musik</button></div>` : `
       <h4>Radio – danske stationer</h4>
       ${this._radio ? `<div class="ml">${this._radio.map((r) => item("radio", r.id, r.t, r.img)).join("")}</div>
         <p class="note nohit" style="display:none">Intet fundet.</p>`
-        : `<p class="note">${this._radioErr ? "Kunne ikke hente radiolisten." : "Henter stationer …"}</p>`}
+        : `<p class="note">${this._radioErr ? "Kunne ikke hente radiolisten." : "Henter stationer …"}</p>`}`}
     </div></div>`;
   }
 
   _filterMusic() {
     const q = (this._q || "").trim().toLowerCase();
-    const items = [...this.shadowRoot.querySelectorAll(".mi")];
+    const items = [...this.shadowRoot.querySelectorAll(".mrow")];
     let n = 0;
     items.forEach((el) => { const ok = !q || el.dataset.t.includes(q); el.style.display = ok ? "" : "none"; if (ok) n++; });
     const nh = this.shadowRoot.querySelector(".nohit");
@@ -382,7 +414,7 @@ class HjemDashboardCard extends HTMLElement {
 
   _popupKey() {
     if (!this._popup) return "";
-    if (this._popup === "music") return "music|" + (this._mTarget || "") + "|" + (this._radio ? this._radio.length : "-");
+    if (this._popup === "music") return "music|" + (this._mMode || "") + "|" + (this._mTarget || "") + "|" + (this._radio ? this._radio.length : "-") + "|" + (this._myFav ? this._myFav.length : "-");
     if (this._popup === "vac") return this._vacIds().map((id) => this._st(id).state + (this._st(id).attributes.fan_speed || "")).join(",");
     return [this._popup, ...this._members(this._popup)].map((id) => {
       const s = this._st(id); return s ? s.state + (s.attributes.brightness || "") : "-";
@@ -579,6 +611,9 @@ class HjemDashboardCard extends HTMLElement {
 
     const ae = this.shadowRoot.activeElement;
     const keepSearch = ae && ae.dataset && ae.dataset.search;
+    const oldPop = this.shadowRoot.querySelector(".pop");
+    const popScroll = oldPop ? oldPop.scrollTop : 0;
+    const popWas = this._popup;
     this.shadowRoot.innerHTML = `
 <style>
 :host { display:block; }
@@ -679,6 +714,9 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .mii ha-icon { --mdc-icon-size:20px; color:${C.muted}; }
 .mi span:not(.mii) { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:15px; }
 .mi .pl { --mdc-icon-size:20px; color:${C.amber}; }
+.mrow { display:flex; align-items:center; gap:2px; } .mrow .mi { flex:1; min-width:0; }
+.hrt { background:none; border:none; padding:8px; color:${C.muted}; display:flex; } .hrt ha-icon { --mdc-icon-size:22px; }
+.hrt:hover { color:${C.text}; } .hrt.on { color:${C.red}; }
 .spks { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; margin-bottom:28px; }
 .spk { background:${C.surface2}; border:1px solid ${C.line}; border-radius:14px; padding:12px 14px; display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
 .spk.on { border-color:${C.amber}; }
@@ -741,7 +779,8 @@ button { font:inherit; color:inherit; cursor:pointer; }
     <button class="act" data-action="skrald"><ha-icon icon="mdi:trash-can-outline"></ha-icon>Skraldespand</button>
     <button class="act ${ferieOn ? "active" : ""}" data-action="ferie"><ha-icon icon="mdi:palm-tree"></ha-icon>Feriemodus ${ferieOn ? "til" : "fra"}</button>
     ${gaest ? `<button class="act ${gaestOn ? "active" : ""}" data-action="gaester"><ha-icon icon="mdi:account-group"></ha-icon>Gæster ${gaestOn ? "til" : "fra"}</button>` : ""}
-    ${this._speakers().length ? `<button class="act" data-action="musik"><ha-icon icon="mdi:music"></ha-icon>Vælg musik</button>` : ""}
+    ${this._speakers().length ? `<button class="act" data-action="musik"><ha-icon icon="mdi:music"></ha-icon>Vælg musik</button>
+    <button class="act" data-action="favs"><ha-icon icon="mdi:heart"></ha-icon>Favoritter</button>` : ""}
   </div>
   <div class="foot">Lys (også på kontakterne), musik og støvsuger finder du i fanerne øverst.</div>` : ""}
 
@@ -760,6 +799,10 @@ button { font:inherit; color:inherit; cursor:pointer; }
     if (keepSearch) {
       const s = this.shadowRoot.querySelector(".srch");
       if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); this._filterMusic(); }
+    }
+    if (popScroll && popWas && popWas === this._popup) {
+      const np = this.shadowRoot.querySelector(".pop");
+      if (np) np.scrollTop = popScroll;
     }
   }
 
@@ -780,6 +823,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
       this._render(); return;
     }
     if (t.dataset.mtarget) { this._mTarget = t.dataset.mtarget; this._render(); return; }
+    if (t.dataset.favtoggle) { this._toggleMyFav(t.dataset.favtoggle, t.dataset.ft, t.dataset.fimg || ""); return; }
     if (t.dataset.play) {
       const fav = t.dataset.kind === "fav";
       call("media_player", "play_media", { entity_id: this._mTarget, media_content_type: fav ? "favorite_item_id" : "music", media_content_id: t.dataset.play });
@@ -802,8 +846,11 @@ button { font:inherit; color:inherit; cursor:pointer; }
       case "ferie":
         call("input_boolean", "toggle", { entity_id: "input_boolean.feriemodus" });
         break;
+      case "favs":
+        this._mMode = "fav"; this._popup = "music"; this._render();
+        break;
       case "musik":
-        this._popup = "music"; this._render();
+        this._mMode = "all"; this._popup = "music"; this._render();
         { const s = this.shadowRoot.querySelector(".srch"); if (s && matchMedia("(hover:hover)").matches) s.focus(); }
         break;
       case "gaester":
