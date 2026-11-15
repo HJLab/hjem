@@ -16,6 +16,11 @@ const PLUGS = [
   { id: "switch.braende_inde_switch_1", name: "Brænde inde", icon: "mdi:lightbulb-outline" },
   { id: "switch.no_3_socket_1", name: "Motorcykel", icon: "mdi:motorbike" },
 ];
+const SPEAKERS = [
+  { id: "media_player.sonos_stue", name: "Stue" },
+  { id: "media_player.sonos_sovevaerelse", name: "Soveværelse" },
+  { id: "media_player.sonos_badevaerelse", name: "Badeværelse" },
+];
 const WEATHER = {
   "clear-night": "Klart", cloudy: "Overskyet", fog: "Tåge", hail: "Hagl", lightning: "Torden",
   "lightning-rainy": "Torden og regn", partlycloudy: "Delvist skyet", pouring: "Skybrud",
@@ -55,6 +60,57 @@ class HjemDashboardCard extends HTMLElement {
   _rooms() { return (this._config && this._config.rooms) || ROOMS; }
   _plugs() { return (this._config && this._config.plugs) || PLUGS; }
   _vac() { return (this._config && this._config.vacuum) || "vacuum.roborock_s5_max"; }
+  _speakers() { return ((this._config && this._config.speakers) || SPEAKERS).filter((x) => this._st(x.id)); }
+
+  _coord(id) { const g = this._st(id).attributes.group_members || []; return g[0] || id; }
+
+  _sonosKey() {
+    return this._speakers().map((x) => { const a = this._st(x.id).attributes;
+      return [this._st(x.id).state, a.volume_level, a.media_title, (a.group_members || []).join(",")].join("~"); }).join("|")
+      + "|" + JSON.stringify((this._st("sensor.sonos_favorites") || { attributes: {} }).attributes.items || {});
+  }
+
+  _sonosHtml() {
+    const sp = this._speakers();
+    if (!sp.length) return "";
+    const TXT = { playing: "Spiller", paused: "På pause", idle: "Stoppet", off: "Slukket", unavailable: "Ikke tilgængelig", buffering: "Henter …" };
+    const nameOf = (id) => (sp.find((x) => x.id === id) || { name: (this._st(id) || { attributes: {} }).attributes.friendly_name || id }).name;
+    const coords = [...new Set(sp.map((x) => this._coord(x.id)))];
+    const main = coords.find((c) => this._st(c) && this._st(c).state === "playing") || coords[0];
+    const np = coords.filter((c) => this._st(c)).map((c) => {
+      const s = this._st(c); const a = s.attributes;
+      const rooms = sp.filter((x) => this._coord(x.id) === c).map((x) => x.name).join(" + ");
+      const title = a.media_title || (TXT[s.state] || s.state);
+      const sub = [a.media_artist, a.media_playlist && a.media_playlist !== a.media_title ? a.media_playlist : ""].filter(Boolean).join(" · ");
+      const playing = s.state === "playing";
+      return `<div class="np">
+        ${a.entity_picture ? `<img src="${a.entity_picture}" alt="">` : `<div class="noart"><ha-icon icon="mdi:music"></ha-icon></div>`}
+        <div class="npi"><small class="rm">${rooms}</small><b>${title}</b>${sub ? `<small>${sub}</small>` : ""}</div>
+        <div class="npb">
+          <button class="ic" data-mp="media_previous_track" data-ent="${c}" aria-label="Forrige"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
+          <button class="ic big ${playing ? "on" : ""}" data-mp="media_play_pause" data-ent="${c}" aria-label="${playing ? "Pause" : "Afspil"}"><ha-icon icon="mdi:${playing ? "pause" : "play"}"></ha-icon></button>
+          <button class="ic" data-mp="media_next_track" data-ent="${c}" aria-label="Næste"><ha-icon icon="mdi:skip-next"></ha-icon></button>
+        </div>
+      </div>`;
+    }).join("");
+    const tiles = sp.map((x) => {
+      const s = this._st(x.id); const a = s.attributes;
+      const vol = Math.round((a.volume_level || 0) * 100);
+      const grouped = (a.group_members || []).length > 1;
+      const btn = grouped
+        ? `<button class="chip on" data-unjoin="${x.id}">I gruppe · tag ud</button>`
+        : main !== x.id ? `<button class="chip" data-join="${x.id}" data-ent="${main}">Spil med ${nameOf(main)}</button>` : "";
+      return `<div class="spk ${s.state === "playing" ? "on" : ""}">
+        <div class="spkh"><ha-icon icon="mdi:speaker"></ha-icon><span><b>${x.name}</b><small>${TXT[s.state] || s.state} · ${vol} %</small></span></div>
+        <input type="range" min="0" max="100" step="1" value="${vol}" data-vol="${x.id}" aria-label="Lydstyrke ${x.name}">
+        ${btn}
+      </div>`;
+    }).join("");
+    const fav = Object.entries((this._st("sensor.sonos_favorites") || { attributes: {} }).attributes.items || {});
+    const favHtml = fav.length ? `<div class="chips favs">${fav.map(([id, t]) =>
+      `<button class="chip" data-fav="${id}" data-ent="${main}">${t}</button>`).join("")}</div>` : "";
+    return `<h2>Musik</h2>${np}${favHtml}<div class="spks">${tiles}</div>`;
+  }
 
   _vacHtml() {
     const id = this._vac();
@@ -92,7 +148,7 @@ class HjemDashboardCard extends HTMLElement {
     const ids = [...this._rooms().map((r) => r.id), ...this._plugs().map((p) => p.id), "sensor.elpris_total", "sensor.hue_outdoor_motion_sensor_1_temperatur",
       "weather.forecast_hjem", "sensor.naeste_vaekkeur", "input_boolean.feriemodus", "input_boolean.gaestetilstand", "device_tracker.hennings_mobil",
       this._vac(), this._vac().replace("vacuum.", "sensor.") + "_batteri", this._vac().replace("vacuum.", "sensor.") + "_vacuum_error"];
-    return ids.map((id) => { const s = this._hass.states[id]; return s ? s.state + (s.attributes.brightness || "") : "-"; }).join("|");
+    return ids.map((id) => { const s = this._hass.states[id]; return s ? s.state + (s.attributes.brightness || "") : "-"; }).join("|") + "#" + this._sonosKey();
   }
 
   _st(id) { return this._hass && this._hass.states[id]; }
@@ -357,8 +413,12 @@ class HjemDashboardCard extends HTMLElement {
         this._lp = setTimeout(() => { this._longFired = true; this._popup = room.dataset.long || room.dataset.toggle; this._render(); }, 600);
       });
       ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => sr.addEventListener(ev, () => clearTimeout(this._lp)));
-      sr.addEventListener("input", (e) => { if (e.target.dataset.dim || e.target.dataset.num) this._dragging = true; });
+      sr.addEventListener("input", (e) => { if (e.target.dataset.dim || e.target.dataset.num || e.target.dataset.vol) this._dragging = true; });
       sr.addEventListener("change", (e) => {
+        if (e.target.dataset.vol) {
+          this._dragging = false;
+          return this._hass.callService("media_player", "volume_set", { entity_id: e.target.dataset.vol, volume_level: Number(e.target.value) / 100 });
+        }
         if (e.target.dataset.num) {
           this._dragging = false;
           return this._hass.callService("number", "set_value", { entity_id: e.target.dataset.num, value: Number(e.target.value) });
@@ -513,7 +573,24 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .kv span { color:${C.muted}; } .kv b { font-weight:600; text-align:right; }
 .wear { padding:6px 0; } .wl { display:flex; justify-content:space-between; font-size:14px; margin-bottom:5px; } .wl small { font-size:13px; font-weight:600; }
 .bar { height:6px; border-radius:99px; background:#1c3a54; overflow:hidden; } .bar i { display:block; height:100%; border-radius:99px; }
+.np { display:flex; align-items:center; gap:14px; background:${C.surface2}; border:1px solid ${C.line}; border-radius:14px; padding:12px 14px; margin-bottom:10px; }
+.np img, .noart { width:64px; height:64px; border-radius:10px; object-fit:cover; flex:none; background:${C.surface}; display:flex; align-items:center; justify-content:center; }
+.noart ha-icon { --mdc-icon-size:28px; color:${C.muted}; }
+.npi { flex:1; min-width:0; } .npi b { display:block; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.npi small { display:block; color:${C.muted}; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .npi .rm { color:${C.blue}; font-weight:600; }
+.npb { display:flex; align-items:center; gap:6px; flex:none; }
+.ic { background:#173650; border:1px solid ${C.line}; border-radius:50%; width:40px; height:40px; display:flex; align-items:center; justify-content:center; padding:0; }
+.ic ha-icon { --mdc-icon-size:22px; } .ic.big { width:48px; height:48px; } .ic.on { background:${C.amberBg}; border-color:${C.amber}; color:${C.amber}; }
+.favs { margin:0 0 10px; }
+.spks { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; margin-bottom:28px; }
+.spk { background:${C.surface2}; border:1px solid ${C.line}; border-radius:14px; padding:12px 14px; display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+.spk.on { border-color:${C.amber}; }
+.spkh { display:flex; align-items:center; gap:10px; } .spkh ha-icon { --mdc-icon-size:24px; color:${C.muted}; } .spk.on .spkh ha-icon { color:${C.amber}; }
+.spkh b { display:block; font-size:15px; } .spkh small { display:block; color:${C.muted}; font-size:13px; }
+.spk input[type=range] { width:100%; accent-color:${C.amber}; height:28px; }
 @media (max-width:600px) {
+  .np { padding:10px; gap:10px; } .np img, .noart { width:52px; height:52px; } .ic { width:36px; height:36px; } .ic.big { width:42px; height:42px; }
+  .spks { grid-template-columns:1fr; gap:8px; margin-bottom:20px; }
   .vac { padding:12px; margin-bottom:20px; } .vbtns { width:100%; } .vbtns .act { flex:1; justify-content:center; padding:9px 8px; }
   .wrap { padding:16px 12px 28px; }
   .top { margin-bottom:14px; }
@@ -560,6 +637,8 @@ button { font:inherit; color:inherit; cursor:pointer; }
 
   ${plugs ? `<h2>Kontakter</h2><div class="rooms">${plugs}</div>` : ""}
 
+  ${this._sonosHtml()}
+
   ${this._vacHtml()}
 
   <h2>Hurtige knapper</h2>
@@ -585,6 +664,10 @@ button { font:inherit; color:inherit; cursor:pointer; }
     if (t.dataset.fan) return call("vacuum", "set_fan_speed", { entity_id: this._vac(), fan_speed: t.dataset.fan });
     if (t.dataset.sel) return call("select", "select_option", { entity_id: t.dataset.sel, option: t.dataset.opt });
     if (t.dataset.sw) return call("switch", "toggle", { entity_id: t.dataset.sw });
+    if (t.dataset.mp) return call("media_player", t.dataset.mp, { entity_id: t.dataset.ent });
+    if (t.dataset.unjoin) return call("media_player", "unjoin", { entity_id: t.dataset.unjoin });
+    if (t.dataset.join) return call("media_player", "join", { entity_id: t.dataset.ent, group_members: [t.dataset.join] });
+    if (t.dataset.fav) return call("media_player", "play_media", { entity_id: t.dataset.ent, media_content_type: "favorite_item_id", media_content_id: t.dataset.fav });
     switch (t.dataset.action) {
       case "alt_sluk":
         if (confirm("Sluk alt lys i huset?")) call("light", "turn_off", { entity_id: "all" });
