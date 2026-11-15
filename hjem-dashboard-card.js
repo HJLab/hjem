@@ -18,6 +18,7 @@ const PLUGS = [
 ];
 const SPEAKERS = [
   { id: "media_player.sonos_stue", name: "Stue" },
+  { id: "media_player.sonos_playbase", name: "Playbase (TV)" },
   { id: "media_player.sonos_sovevaerelse", name: "Soveværelse" },
   { id: "media_player.sonos_badevaerelse", name: "Badeværelse" },
 ];
@@ -109,7 +110,66 @@ class HjemDashboardCard extends HTMLElement {
     const fav = Object.entries((this._st("sensor.sonos_favorites") || { attributes: {} }).attributes.items || {});
     const favHtml = fav.length ? `<div class="chips favs">${fav.map(([id, t]) =>
       `<button class="chip" data-fav="${id}" data-ent="${main}">${t}</button>`).join("")}</div>` : "";
-    return `<h2>Musik</h2>${np}${favHtml}<div class="spks">${tiles}</div>`;
+    return `<h2>Musik</h2>${np}<div class="chips favs"><button class="act pick" data-action="musik"><ha-icon icon="mdi:magnify"></ha-icon>Vælg musik</button></div>${favHtml}<div class="spks">${tiles}</div>`;
+  }
+
+  // Henter danske radiostationer fra Home Assistants radioliste (én gang pr. 12 timer)
+  async _loadRadio() {
+    if (this._radioBusy || (this._radioAt && Date.now() - this._radioAt < 432e5)) return;
+    this._radioBusy = true;
+    try {
+      const sp = this._speakers()[0];
+      const r = await this._hass.callWS({ type: "media_player/browse_media", entity_id: sp.id,
+        media_content_type: "app", media_content_id: "media-source://radio_browser/country/DK" });
+      const seen = new Set();
+      this._radio = (r.children || []).filter((x) => x.can_play && !seen.has(x.title.trim().toLowerCase()) && seen.add(x.title.trim().toLowerCase()))
+        .map((x) => ({ id: x.media_content_id, t: x.title.trim(), img: x.thumbnail || "" }));
+      const pri = (t) => (/^(dr )?p[1-8]\b|^dr |danmarks radio/i.test(t) ? 0 : 1);
+      this._radio.sort((a, b) => pri(a.t) - pri(b.t) || a.t.localeCompare(b.t, "da"));
+      this._radioAt = Date.now();
+      this._lastKey = null;
+      this._render();
+    } catch (e) { this._radio = this._radio || []; this._radioErr = true; }
+    this._radioBusy = false;
+  }
+
+  _musicPopup() {
+    const sp = this._speakers();
+    if (!sp.length) return "";
+    this._loadRadio();
+    const coords = [...new Set(sp.map((x) => this._coord(x.id)))];
+    const label = (c) => sp.filter((x) => this._coord(x.id) === c).map((x) => x.name).join(" + ") || c;
+    if (!this._mTarget || !coords.includes(this._mTarget))
+      this._mTarget = coords.find((c) => this._st(c) && this._st(c).state === "playing") || coords[0];
+    const q = (this._q || "").trim().toLowerCase();
+    const hide = (t) => (q && !t.toLowerCase().includes(q) ? ' style="display:none"' : "");
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const fav = Object.entries((this._st("sensor.sonos_favorites") || { attributes: {} }).attributes.items || {});
+    const item = (kind, id, t, img) => `<button class="mi" data-play="${esc(id)}" data-kind="${kind}" data-t="${esc(t.toLowerCase())}"${hide(t)}>
+      ${img ? `<img src="${esc(img)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : `<span class="mii"><ha-icon icon="mdi:${kind === "fav" ? "heart" : "radio"}"></ha-icon></span>`}
+      <span>${esc(t)}</span><ha-icon class="pl" icon="mdi:play"></ha-icon></button>`;
+    return `<div class="ov" data-close="1"><div class="pop mpop" role="dialog" aria-label="Vælg musik">
+      <div class="ph"><h3>Vælg musik</h3><button class="x" data-close="1" aria-label="Luk">✕</button></div>
+      <h4 style="margin-top:0">Spil i</h4>
+      <div class="chips">${coords.map((c) => `<button class="chip ${c === this._mTarget ? "on" : ""}" data-mtarget="${c}">${label(c)}</button>`).join("")}</div>
+      <input class="srch" type="search" placeholder="Søg i favoritter og radio …" value="${esc(this._q || "")}" data-search="1" aria-label="Søg">
+      <h4>Sonos-favoritter</h4>
+      ${fav.length ? `<div class="ml">${fav.map(([id, t]) => item("fav", id, t, "")).join("")}</div>`
+        : `<p class="note">Ingen endnu. Tryk på hjertet ved en spilleliste, et album eller en station i Sonos-appen – så dukker den op her (også fra YouSee Musik).</p>`}
+      <h4>Radio – danske stationer</h4>
+      ${this._radio ? `<div class="ml">${this._radio.map((r) => item("radio", r.id, r.t, r.img)).join("")}</div>
+        <p class="note nohit" style="display:none">Intet fundet.</p>`
+        : `<p class="note">${this._radioErr ? "Kunne ikke hente radiolisten." : "Henter stationer …"}</p>`}
+    </div></div>`;
+  }
+
+  _filterMusic() {
+    const q = (this._q || "").trim().toLowerCase();
+    const items = [...this.shadowRoot.querySelectorAll(".mi")];
+    let n = 0;
+    items.forEach((el) => { const ok = !q || el.dataset.t.includes(q); el.style.display = ok ? "" : "none"; if (ok) n++; });
+    const nh = this.shadowRoot.querySelector(".nohit");
+    if (nh) nh.style.display = n ? "none" : "";
   }
 
   _vacHtml() {
@@ -316,6 +376,7 @@ class HjemDashboardCard extends HTMLElement {
 
   _popupKey() {
     if (!this._popup) return "";
+    if (this._popup === "music") return "music|" + (this._mTarget || "") + "|" + (this._radio ? this._radio.length : "-");
     if (this._popup === "vac") return this._vacIds().map((id) => this._st(id).state + (this._st(id).attributes.fan_speed || "")).join(",");
     return [this._popup, ...this._members(this._popup)].map((id) => {
       const s = this._st(id); return s ? s.state + (s.attributes.brightness || "") : "-";
@@ -340,6 +401,7 @@ class HjemDashboardCard extends HTMLElement {
   _popupHtml() {
     if (!this._popup) return "";
     if (this._popup === "vac") return this._vacPopup();
+    if (this._popup === "music") return this._musicPopup();
     const r = this._rooms().find((x) => x.id === this._popup) || { name: "", id: this._popup };
     const members = this._members(this._popup);
     const rows = members.map((id) => {
@@ -413,6 +475,7 @@ class HjemDashboardCard extends HTMLElement {
         this._lp = setTimeout(() => { this._longFired = true; this._popup = room.dataset.long || room.dataset.toggle; this._render(); }, 600);
       });
       ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => sr.addEventListener(ev, () => clearTimeout(this._lp)));
+      sr.addEventListener("input", (e) => { if (e.target.dataset.search) { this._q = e.target.value; this._filterMusic(); } });
       sr.addEventListener("input", (e) => { if (e.target.dataset.dim || e.target.dataset.num || e.target.dataset.vol) this._dragging = true; });
       sr.addEventListener("change", (e) => {
         if (e.target.dataset.vol) {
@@ -501,6 +564,8 @@ class HjemDashboardCard extends HTMLElement {
       </button>`;
     }).join("");
 
+    const ae = this.shadowRoot.activeElement;
+    const keepSearch = ae && ae.dataset && ae.dataset.search;
     this.shadowRoot.innerHTML = `
 <style>
 :host { display:block; }
@@ -582,6 +647,16 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .ic { background:#173650; border:1px solid ${C.line}; border-radius:50%; width:40px; height:40px; display:flex; align-items:center; justify-content:center; padding:0; }
 .ic ha-icon { --mdc-icon-size:22px; } .ic.big { width:48px; height:48px; } .ic.on { background:${C.amberBg}; border-color:${C.amber}; color:${C.amber}; }
 .favs { margin:0 0 10px; }
+.mpop { width:min(520px,100%); }
+.srch { width:100%; margin-top:14px; padding:11px 14px; border-radius:12px; border:1px solid ${C.line}; background:${C.surface}; color:${C.text}; font:inherit; font-size:16px; }
+.srch:focus { outline:none; border-color:${C.blue}; }
+.ml { display:flex; flex-direction:column; gap:4px; }
+.mi { display:flex; align-items:center; gap:12px; width:100%; text-align:left; background:none; border:1px solid transparent; border-radius:10px; padding:6px 8px; }
+.mi:hover { background:#173650; border-color:${C.line}; }
+.mi img, .mii { width:36px; height:36px; border-radius:8px; object-fit:cover; flex:none; background:${C.surface2}; display:flex; align-items:center; justify-content:center; }
+.mii ha-icon { --mdc-icon-size:20px; color:${C.muted}; }
+.mi span { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:15px; }
+.mi .pl { --mdc-icon-size:20px; color:${C.amber}; }
 .spks { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; margin-bottom:28px; }
 .spk { background:${C.surface2}; border:1px solid ${C.line}; border-radius:14px; padding:12px 14px; display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
 .spk.on { border-color:${C.amber}; }
@@ -651,6 +726,10 @@ button { font:inherit; color:inherit; cursor:pointer; }
   </div>
   <div class="foot">Tryk på et rum eller en kontakt for at tænde eller slukke. Hold et rum nede for lysstyrke og de enkelte lamper. Hold støvsugeren nede for kort, indstillinger og vedligehold.</div>
 </div></div>${this._popupHtml()}`;
+    if (keepSearch) {
+      const s = this.shadowRoot.querySelector(".srch");
+      if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); this._filterMusic(); }
+    }
   }
 
   _click(e) {
@@ -664,6 +743,12 @@ button { font:inherit; color:inherit; cursor:pointer; }
     if (t.dataset.fan) return call("vacuum", "set_fan_speed", { entity_id: this._vac(), fan_speed: t.dataset.fan });
     if (t.dataset.sel) return call("select", "select_option", { entity_id: t.dataset.sel, option: t.dataset.opt });
     if (t.dataset.sw) return call("switch", "toggle", { entity_id: t.dataset.sw });
+    if (t.dataset.mtarget) { this._mTarget = t.dataset.mtarget; this._render(); return; }
+    if (t.dataset.play) {
+      const fav = t.dataset.kind === "fav";
+      call("media_player", "play_media", { entity_id: this._mTarget, media_content_type: fav ? "favorite_item_id" : "music", media_content_id: t.dataset.play });
+      this._popup = null; this._render(); return;
+    }
     if (t.dataset.mp) return call("media_player", t.dataset.mp, { entity_id: t.dataset.ent });
     if (t.dataset.unjoin) return call("media_player", "unjoin", { entity_id: t.dataset.unjoin });
     if (t.dataset.join) return call("media_player", "join", { entity_id: t.dataset.ent, group_members: [t.dataset.join] });
@@ -680,6 +765,10 @@ button { font:inherit; color:inherit; cursor:pointer; }
         break;
       case "ferie":
         call("input_boolean", "toggle", { entity_id: "input_boolean.feriemodus" });
+        break;
+      case "musik":
+        this._popup = "music"; this._render();
+        { const s = this.shadowRoot.querySelector(".srch"); if (s && matchMedia("(hover:hover)").matches) s.focus(); }
         break;
       case "gaester":
         call("input_boolean", "toggle", { entity_id: "input_boolean.gaestetilstand" });
