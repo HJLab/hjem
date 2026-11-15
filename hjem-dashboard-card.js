@@ -128,7 +128,8 @@ class HjemDashboardCard extends HTMLElement {
       const r = await this._hass.callWS({ type: "media_player/browse_media", entity_id: sp.id,
         media_content_type: "app", media_content_id: "media-source://radio_browser/country/DK" });
       const seen = new Set();
-      this._radio = (r.children || []).filter((x) => x.can_play && !seen.has(x.title.trim().toLowerCase()) && seen.add(x.title.trim().toLowerCase()))
+      // (AAC)-kanalerne er HLS-strømme (.m3u8), som Sonos ikke kan spille som netradio – de udelades
+      this._radio = (r.children || []).filter((x) => x.can_play && !/\(aac\)/i.test(x.title) && !seen.has(x.title.trim().toLowerCase()) && seen.add(x.title.trim().toLowerCase()))
         .map((x) => ({ id: x.media_content_id, t: x.title.trim(), img: x.thumbnail || "" }));
       const pri = (t) => (/^(dr )?p[1-8]\b|^dr |danmarks radio/i.test(t) ? 0 : 1);
       this._radio.sort((a, b) => pri(a.t) - pri(b.t) || a.t.localeCompare(b.t, "da"));
@@ -826,7 +827,13 @@ button { font:inherit; color:inherit; cursor:pointer; }
     if (t.dataset.favtoggle) { this._toggleMyFav(t.dataset.favtoggle, t.dataset.ft, t.dataset.fimg || ""); return; }
     if (t.dataset.play) {
       const fav = t.dataset.kind === "fav";
-      call("media_player", "play_media", { entity_id: this._mTarget, media_content_type: fav ? "favorite_item_id" : "music", media_content_id: t.dataset.play });
+      const id = t.dataset.play, target = this._mTarget;
+      const go = () => call("media_player", "play_media", { entity_id: target, media_content_type: fav ? "favorite_item_id" : "music", media_content_id: id });
+      if (!fav && id.startsWith("media-source://radio_browser/")) {
+        this._hass.callWS({ type: "media_source/resolve_media", media_content_id: id })
+          .then((r) => { if (r && /\.m3u8/i.test(r.url || "")) alert("Denne kanal sendes i et format, som Sonos ikke kan afspille. Vælg en anden udgave af kanalen (fx uden “AAC”)."); else go(); })
+          .catch(go);
+      } else go();
       this._popup = null; this._render(); return;
     }
     if (t.dataset.mp) return call("media_player", t.dataset.mp, { entity_id: t.dataset.ent });
