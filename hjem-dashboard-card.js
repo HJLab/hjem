@@ -90,7 +90,7 @@ class HjemDashboardCard extends HTMLElement {
 
   _stateKey() {
     const ids = [...this._rooms().map((r) => r.id), ...this._plugs().map((p) => p.id), "sensor.elpris_total", "sensor.hue_outdoor_motion_sensor_1_temperatur",
-      "weather.forecast_hjem", "sensor.naeste_vaekkeur", "input_boolean.feriemodus", "device_tracker.hennings_mobil",
+      "weather.forecast_hjem", "sensor.naeste_vaekkeur", "input_boolean.feriemodus", "input_boolean.gaestetilstand", "device_tracker.hennings_mobil",
       this._vac(), this._vac().replace("vacuum.", "sensor.") + "_batteri", this._vac().replace("vacuum.", "sensor.") + "_vacuum_error"];
     return ids.map((id) => { const s = this._hass.states[id]; return s ? s.state + (s.attributes.brightness || "") : "-"; }).join("|");
   }
@@ -414,6 +414,8 @@ class HjemDashboardCard extends HTMLElement {
 
     const ferie = this._st("input_boolean.feriemodus");
     const ferieOn = ferie && ferie.state === "on";
+    const gaest = this._st("input_boolean.gaestetilstand");
+    const gaestOn = gaest && gaest.state === "on";
 
     const rooms = this._rooms().map((r) => {
       const s = this._st(r.id);
@@ -566,6 +568,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
     <button class="act" data-action="afsted"><ha-icon icon="mdi:walk"></ha-icon>Jeg skal afsted</button>
     <button class="act" data-action="skrald"><ha-icon icon="mdi:trash-can-outline"></ha-icon>Skraldespand</button>
     <button class="act ${ferieOn ? "active" : ""}" data-action="ferie"><ha-icon icon="mdi:palm-tree"></ha-icon>Feriemodus ${ferieOn ? "til" : "fra"}</button>
+    ${gaest ? `<button class="act ${gaestOn ? "active" : ""}" data-action="gaester"><ha-icon icon="mdi:account-group"></ha-icon>Gæster ${gaestOn ? "til" : "fra"}</button>` : ""}
   </div>
   <div class="foot">Tryk på et rum eller en kontakt for at tænde eller slukke. Hold et rum nede for lysstyrke og de enkelte lamper. Hold støvsugeren nede for kort, indstillinger og vedligehold.</div>
 </div></div>${this._popupHtml()}`;
@@ -594,6 +597,9 @@ button { font:inherit; color:inherit; cursor:pointer; }
         break;
       case "ferie":
         call("input_boolean", "toggle", { entity_id: "input_boolean.feriemodus" });
+        break;
+      case "gaester":
+        call("input_boolean", "toggle", { entity_id: "input_boolean.gaestetilstand" });
         break;
     }
   }
