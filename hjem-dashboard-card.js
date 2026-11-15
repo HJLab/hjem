@@ -9,6 +9,13 @@ const ROOMS = [
   { id: "light.carport_carport", name: "Carport", icon: "mdi:car" },
   { id: "light.ude_ude", name: "Ude", icon: "mdi:pine-tree" },
 ];
+const PLUGS = [
+  { id: "switch.udestue_socket_1", name: "Udestue", icon: "mdi:greenhouse" },
+  { id: "switch.have_lys_i_overdaekket_socket_1", name: "Overdækket", icon: "mdi:string-lights" },
+  { id: "switch.braende_ude_switch_1", name: "Brænde ude", icon: "mdi:lightbulb-outline" },
+  { id: "switch.braende_inde_switch_1", name: "Brænde inde", icon: "mdi:lightbulb-outline" },
+  { id: "switch.no_3_socket_1", name: "Motorcykel", icon: "mdi:motorbike" },
+];
 const WEATHER = {
   "clear-night": "Klart", cloudy: "Overskyet", fog: "Tåge", hail: "Hagl", lightning: "Torden",
   "lightning-rainy": "Torden og regn", partlycloudy: "Delvist skyet", pouring: "Skybrud",
@@ -46,6 +53,7 @@ class HjemDashboardCard extends HTMLElement {
   }
 
   _rooms() { return (this._config && this._config.rooms) || ROOMS; }
+  _plugs() { return (this._config && this._config.plugs) || PLUGS; }
   _vac() { return (this._config && this._config.vacuum) || "vacuum.roborock_s5_max"; }
 
   _vacHtml() {
@@ -81,7 +89,7 @@ class HjemDashboardCard extends HTMLElement {
   }
 
   _stateKey() {
-    const ids = [...this._rooms().map((r) => r.id), "sensor.elpris_total", "sensor.hue_outdoor_motion_sensor_1_temperatur",
+    const ids = [...this._rooms().map((r) => r.id), ...this._plugs().map((p) => p.id), "sensor.elpris_total", "sensor.hue_outdoor_motion_sensor_1_temperatur",
       "weather.forecast_hjem", "sensor.naeste_vaekkeur", "input_boolean.feriemodus", "device_tracker.hennings_mobil",
       this._vac(), this._vac().replace("vacuum.", "sensor.") + "_batteri", this._vac().replace("vacuum.", "sensor.") + "_vacuum_error"];
     return ids.map((id) => { const s = this._hass.states[id]; return s ? s.state + (s.attributes.brightness || "") : "-"; }).join("|");
@@ -342,7 +350,7 @@ class HjemDashboardCard extends HTMLElement {
       sr.addEventListener("click", (e) => this._click(e));
       sr.addEventListener("contextmenu", (e) => { if (e.target.closest(".room,.vac")) e.preventDefault(); });
       sr.addEventListener("pointerdown", (e) => {
-        const room = e.target.closest(".room,[data-long]");
+        const room = e.target.closest(".room:not(.plug),[data-long]");
         if (!room) return;
         this._longFired = false;
         clearTimeout(this._lp);
@@ -420,6 +428,17 @@ class HjemDashboardCard extends HTMLElement {
       </button>`;
     }).join("");
 
+    const plugs = this._plugs().map((p) => {
+      const s = this._st(p.id);
+      if (!s) return "";
+      const on = s.state === "on";
+      const off = ["unavailable", "unknown"].includes(s.state);
+      return `<button class="room plug ${on ? "on" : ""}" data-sw="${p.id}" aria-pressed="${on}" ${off ? "disabled" : ""}>
+        <ha-icon icon="${p.icon}"></ha-icon>
+        <span><b>${p.name}</b><small>${off ? "Ikke på Wi-Fi" : on ? "Tændt" : "Slukket"}</small></span>
+      </button>`;
+    }).join("");
+
     this.shadowRoot.innerHTML = `
 <style>
 :host { display:block; }
@@ -449,6 +468,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .room small { display:block; color:${C.muted}; font-size:13px; margin-top:2px; }
 .room.on { background:${C.amberBg}; border-color:${C.amber}; }
 .room.on ha-icon { color:${C.amber}; }
+.room[disabled] { opacity:.45; cursor:default; }
 .actions { display:flex; flex-wrap:wrap; gap:10px; }
 .act { display:flex; align-items:center; gap:8px; background:#173650; border:1px solid ${C.line}; border-radius:999px;
   padding:11px 18px; font-weight:600; font-size:15px; }
@@ -536,6 +556,8 @@ button { font:inherit; color:inherit; cursor:pointer; }
   <h2>Rum</h2>
   <div class="rooms">${rooms}</div>
 
+  ${plugs ? `<h2>Kontakter</h2><div class="rooms">${plugs}</div>` : ""}
+
   ${this._vacHtml()}
 
   <h2>Hurtige knapper</h2>
@@ -545,7 +567,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
     <button class="act" data-action="skrald"><ha-icon icon="mdi:trash-can-outline"></ha-icon>Skraldespand</button>
     <button class="act ${ferieOn ? "active" : ""}" data-action="ferie"><ha-icon icon="mdi:palm-tree"></ha-icon>Feriemodus ${ferieOn ? "til" : "fra"}</button>
   </div>
-  <div class="foot">Tryk på et rum for at tænde eller slukke. Hold et rum nede for lysstyrke og de enkelte lamper. Hold støvsugeren nede for kort, indstillinger og vedligehold.</div>
+  <div class="foot">Tryk på et rum eller en kontakt for at tænde eller slukke. Hold et rum nede for lysstyrke og de enkelte lamper. Hold støvsugeren nede for kort, indstillinger og vedligehold.</div>
 </div></div>${this._popupHtml()}`;
   }
 
