@@ -459,33 +459,51 @@ class HjemDashboardCard extends HTMLElement {
 
   _isEvening(d) { const h = d.getHours(); return h >= 18 || h < 3; }
 
-  // Første hverdag efter aftenuret, på det faste morgen-klokkeslæt
-  _nextWeekday(after, hm) {
-    const d = new Date(after);
-    d.setHours(hm[0], hm[1], 0, 0);
-    do { d.setDate(d.getDate() + 1); } while (d.getDay() === 0 || d.getDay() === 6);
-    return d;
+  // Telefonens nattilstand (start/slut) skal ikke vises som vækkeur. Kan overstyres med config ignore_alarms: ["22:00","05:50"]
+  _ignoreAlarm(d) {
+    const ign = (this._config && this._config.ignore_alarms) || ["22:00", "05:50"];
+    const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    return ign.includes(hm) || this._isEvening(d);
   }
 
-  // Find det faste hverdags-vækkeur ud fra de sidste 10 dages historik (første morgen-alarm pr. hverdag)
+  // Første rigtige vækkeur efter tidspunktet (ugedagsmønster fra historikken)
+  _nextMorning(after) {
+    for (let i = 0; i <= 7; i++) {
+      const d = new Date(after);
+      d.setDate(d.getDate() + i);
+      const wd = d.getDay();
+      const hm = wd in this._mornings ? this._mornings[wd] : (wd >= 1 && wd <= 5 ? this._mornings.hverdag : null);
+      if (!hm) continue;
+      d.setHours(hm[0], hm[1], 0, 0);
+      if (d > after) return d;
+    }
+    return null;
+  }
+
+  // Lær morgen-vækkeurene pr. ugedag ud fra de sidste 14 dages historik (første morgen-alarm pr. dato; nyeste dato pr. ugedag vinder)
   async _loadMorning() {
     if (this._morningBusy || (this._morningAt && Date.now() - this._morningAt < 3600e3)) return;
     this._morningBusy = true;
     try {
-      const start = new Date(Date.now() - 10 * 864e5).toISOString();
+      const start = new Date(Date.now() - 14 * 864e5).toISOString();
       const r = await this._hass.callWS({ type: "history/history_during_period", start_time: start,
         entity_ids: ["sensor.naeste_vaekkeur"], minimal_response: true, no_attributes: true });
-      const first = {};
+      // Pr. dato: første rigtige morgen-vækkeur, eller null hvis dagen kun havde nattilstandens tidspunkt (fx 05:50)
+      const days = {};
       for (const x of r["sensor.naeste_vaekkeur"] || []) {
         const d = new Date(x.s);
-        if (isNaN(d) || this._isEvening(d) || d.getHours() > 10 || d.getDay() === 0 || d.getDay() === 6) continue;
-        const k = d.toDateString();
-        if (!first[k] || d < first[k]) first[k] = d;
+        if (isNaN(d) || this._isEvening(d) || d.getHours() > 10) continue;
+        const k = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+        if (this._ignoreAlarm(d)) { if (!(k in days)) days[k] = null; continue; }
+        if (!days[k] || d < days[k]) days[k] = d;
       }
-      const count = {};
-      Object.values(first).forEach((d) => { const k = d.getHours() + ":" + d.getMinutes(); count[k] = (count[k] || 0) + 1; });
-      const best = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
-      this._morning = best ? best[0].split(":").map(Number) : null;
+      const m = {};
+      Object.keys(days).map(Number).sort((a, b) => a - b).forEach((k) => {
+        const d = days[k], wd = new Date(k).getDay();
+        m[wd] = d ? [d.getHours(), d.getMinutes()] : null; // nyeste uge vinder
+        if (d && wd >= 1 && wd <= 5) m.hverdag = [d.getHours(), d.getMinutes()]; // reserve for hverdage uden historik
+      });
+      this._mornings = m;
       this._morningAt = Date.now();
       this._render();
     } catch (e) { /* prøv igen ved næste opdatering */ }
@@ -561,16 +579,16 @@ class HjemDashboardCard extends HTMLElement {
     };
     if (vk && !["unknown", "unavailable", ""].includes(vk.state)) {
       let d = new Date(vk.state);
-      if (!isNaN(d) && (this._isEvening(d) || d.getDay() === 0 || d.getDay() === 6)) {
-        // Aftenure (fx 22:00 nattilstand) og weekend-ure (fx 05:50) ignoreres – vis det faste hverdags-vækkeur i stedet
+      if (!isNaN(d) && this._ignoreAlarm(d)) {
+        // Nattilstandens start (22:00) og slut (05:50) meldes af telefonen som "vækkeur" – vis i stedet næste rigtige vækkeur ud fra ugedagsmønsteret
         this._loadMorning();
-        d = this._morning ? this._nextWeekday(d, this._morning) : null;
+        d = this._mornings ? this._nextMorning(d) : null;
       }
       if (d && !isNaN(d)) {
         vkTxt = d.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
         vkSub = `${dayName(d)}<span class="long"> · morgenlys 40 % → 50 %</span>`;
       } else if (d === null) {
-        vkTxt = "–"; vkSub = this._morningAt ? "Intet hverdags-vækkeur fundet" : "Henter …";
+        vkTxt = "–"; vkSub = this._morningAt ? "Intet morgen-vækkeur fundet" : "Henter …";
       }
     }
 
