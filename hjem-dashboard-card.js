@@ -561,8 +561,8 @@ class HjemDashboardCard extends HTMLElement {
     };
     if (vk && !["unknown", "unavailable", ""].includes(vk.state)) {
       let d = new Date(vk.state);
-      if (!isNaN(d) && this._isEvening(d)) {
-        // Aftenure (fx 22:00 nattilstand) ignoreres – vis det faste hverdags-vækkeur i stedet
+      if (!isNaN(d) && (this._isEvening(d) || d.getDay() === 0 || d.getDay() === 6)) {
+        // Aftenure (fx 22:00 nattilstand) og weekend-ure (fx 05:50) ignoreres – vis det faste hverdags-vækkeur i stedet
         this._loadMorning();
         d = this._morning ? this._nextWeekday(d, this._morning) : null;
       }
