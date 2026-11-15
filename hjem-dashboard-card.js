@@ -22,6 +22,12 @@ const SPEAKERS = [
   { id: "media_player.sonos_sovevaerelse", name: "Soveværelse" },
   { id: "media_player.sonos_badevaerelse", name: "Badeværelse" },
 ];
+const TABS = [
+  { id: "forside", name: "Forside", icon: "mdi:home-outline" },
+  { id: "lys", name: "Lys", icon: "mdi:lightbulb-group-outline" },
+  { id: "musik", name: "Musik", icon: "mdi:music" },
+  { id: "smart", name: "Smart enheder", icon: "mdi:power-socket-eu" },
+];
 const WEATHER = {
   "clear-night": "Klart", cloudy: "Overskyet", fog: "Tåge", hail: "Hagl", lightning: "Torden",
   "lightning-rainy": "Torden og regn", partlycloudy: "Delvist skyet", pouring: "Skybrud",
@@ -564,6 +570,12 @@ class HjemDashboardCard extends HTMLElement {
       </button>`;
     }).join("");
 
+    if (!this._tab) { try { this._tab = localStorage.getItem("hjem-tab") || "forside"; } catch (e) { this._tab = "forside"; } }
+    const tab = TABS.some((x) => x.id === this._tab) ? this._tab : "forside";
+    const lysOn = this._rooms().filter((r) => this._st(r.id) && this._st(r.id).state === "on").length;
+    const smartOn = this._plugs().filter((p) => this._st(p.id) && this._st(p.id).state === "on").length;
+    const playing = this._speakers().some((x) => this._st(x.id).state === "playing");
+
     const ae = this.shadowRoot.activeElement;
     const keepSearch = ae && ae.dataset && ae.dataset.search;
     this.shadowRoot.innerHTML = `
@@ -647,6 +659,15 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .ic { background:#173650; border:1px solid ${C.line}; border-radius:50%; width:40px; height:40px; display:flex; align-items:center; justify-content:center; padding:0; }
 .ic ha-icon { --mdc-icon-size:22px; } .ic.big { width:48px; height:48px; } .ic.on { background:${C.amberBg}; border-color:${C.amber}; color:${C.amber}; }
 .favs { margin:0 0 10px; }
+.tabs { position:sticky; top:0; z-index:5; display:flex; gap:6px; background:${C.bg}; padding:8px 0 12px; margin:-4px 0 18px; border-bottom:1px solid ${C.line}; overflow-x:auto; scrollbar-width:none; }
+.tabs::-webkit-scrollbar { display:none; }
+.tab { position:relative; display:flex; align-items:center; gap:8px; flex:none; background:none; border:1px solid transparent; border-radius:999px; padding:9px 16px; font-weight:600; font-size:15px; color:${C.muted}; }
+.tab ha-icon { --mdc-icon-size:20px; }
+.tab:hover { background:${C.surface2}; color:${C.text}; }
+.tab.on { background:${C.amberBg}; border-color:${C.amber}; color:${C.amber}; }
+.tab .cnt { font-style:normal; font-size:11px; font-weight:700; background:${C.amber}; color:${C.bg}; border-radius:999px; padding:1px 6px; }
+.tab .dot { width:8px; height:8px; border-radius:50%; background:${C.green}; }
+@media (max-width:420px) { .tab ha-icon { display:none; } }
 .mpop { width:min(520px,100%); }
 .srch { width:100%; margin-top:14px; padding:11px 14px; border-radius:12px; border:1px solid ${C.line}; background:${C.surface}; color:${C.text}; font:inherit; font-size:16px; }
 .srch:focus { outline:none; border-color:${C.blue}; }
@@ -664,6 +685,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .spkh b { display:block; font-size:15px; } .spkh small { display:block; color:${C.muted}; font-size:13px; }
 .spk input[type=range] { width:100%; accent-color:${C.amber}; height:28px; }
 @media (max-width:600px) {
+  .tabs { gap:4px; margin-bottom:14px; } .tab { padding:8px 11px; font-size:13.5px; gap:5px; } .tab ha-icon { --mdc-icon-size:18px; }
   .np { padding:10px; gap:10px; } .np img, .noart { width:52px; height:52px; } .ic { width:36px; height:36px; } .ic.big { width:42px; height:42px; }
   .spks { grid-template-columns:1fr; gap:8px; margin-bottom:20px; }
   .vac { padding:12px; margin-bottom:20px; } .vbtns { width:100%; } .vbtns .act { flex:1; justify-content:center; padding:9px 8px; }
@@ -689,6 +711,10 @@ button { font:inherit; color:inherit; cursor:pointer; }
     <span class="pill" style="color:${isHome ? C.green : C.muted};background:${isHome ? C.greenBg : C.surface2}">${isHome ? "Hjemme" : "Ude"}</span>
   </div>
 
+  <nav class="tabs" role="tablist">${TABS.map((x) => `<button class="tab ${tab === x.id ? "on" : ""}" data-tab="${x.id}" role="tab" aria-selected="${tab === x.id}">
+    <ha-icon icon="${x.icon}"></ha-icon><span>${x.name}</span>${x.id === "lys" && lysOn ? `<i class="cnt">${lysOn}</i>` : x.id === "musik" && playing ? `<i class="dot"></i>` : x.id === "smart" && smartOn ? `<i class="cnt">${smartOn}</i>` : ""}</button>`).join("")}</nav>
+
+  ${tab === "forside" ? `
   <div class="cards">
     <div class="card" style="background:${lvl.bg};border-color:${lvl.line}">
       <p class="lbl">Elpris nu</p>
@@ -707,15 +733,6 @@ button { font:inherit; color:inherit; cursor:pointer; }
     </div>
   </div>
 
-  <h2>Rum</h2>
-  <div class="rooms">${rooms}</div>
-
-  ${plugs ? `<h2>Kontakter</h2><div class="rooms">${plugs}</div>` : ""}
-
-  ${this._sonosHtml()}
-
-  ${this._vacHtml()}
-
   <h2>Hurtige knapper</h2>
   <div class="actions">
     <button class="act" data-action="alt_sluk"><ha-icon icon="mdi:power"></ha-icon>Sluk alt lys</button>
@@ -723,8 +740,21 @@ button { font:inherit; color:inherit; cursor:pointer; }
     <button class="act" data-action="skrald"><ha-icon icon="mdi:trash-can-outline"></ha-icon>Skraldespand</button>
     <button class="act ${ferieOn ? "active" : ""}" data-action="ferie"><ha-icon icon="mdi:palm-tree"></ha-icon>Feriemodus ${ferieOn ? "til" : "fra"}</button>
     ${gaest ? `<button class="act ${gaestOn ? "active" : ""}" data-action="gaester"><ha-icon icon="mdi:account-group"></ha-icon>Gæster ${gaestOn ? "til" : "fra"}</button>` : ""}
+    ${this._speakers().length ? `<button class="act" data-action="musik"><ha-icon icon="mdi:music"></ha-icon>Vælg musik</button>` : ""}
   </div>
-  <div class="foot">Tryk på et rum eller en kontakt for at tænde eller slukke. Hold et rum nede for lysstyrke og de enkelte lamper. Hold støvsugeren nede for kort, indstillinger og vedligehold.</div>
+  <div class="foot">Lys, musik og smarte enheder finder du i fanerne øverst.</div>` : ""}
+
+  ${tab === "lys" ? `
+  <h2>Rum</h2>
+  <div class="rooms">${rooms}</div>
+  <div class="foot">Tryk på et rum for at tænde eller slukke. Hold et rum nede for lysstyrke og de enkelte lamper.</div>` : ""}
+
+  ${tab === "musik" ? this._sonosHtml() : ""}
+
+  ${tab === "smart" ? `
+  ${plugs ? `<h2>Kontakter</h2><div class="rooms">${plugs}</div>` : ""}
+  ${this._vacHtml()}
+  <div class="foot">Tryk på en kontakt for at tænde eller slukke. Hold støvsugeren nede for kort, indstillinger og vedligehold.</div>` : ""}
 </div></div>${this._popupHtml()}`;
     if (keepSearch) {
       const s = this.shadowRoot.querySelector(".srch");
@@ -743,6 +773,11 @@ button { font:inherit; color:inherit; cursor:pointer; }
     if (t.dataset.fan) return call("vacuum", "set_fan_speed", { entity_id: this._vac(), fan_speed: t.dataset.fan });
     if (t.dataset.sel) return call("select", "select_option", { entity_id: t.dataset.sel, option: t.dataset.opt });
     if (t.dataset.sw) return call("switch", "toggle", { entity_id: t.dataset.sw });
+    if (t.dataset.tab) {
+      this._tab = t.dataset.tab;
+      try { localStorage.setItem("hjem-tab", this._tab); } catch (x) { /* ignorer */ }
+      this._render(); return;
+    }
     if (t.dataset.mtarget) { this._mTarget = t.dataset.mtarget; this._render(); return; }
     if (t.dataset.play) {
       const fav = t.dataset.kind === "fav";
