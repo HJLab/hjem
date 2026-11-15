@@ -655,7 +655,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .mi:hover { background:#173650; border-color:${C.line}; }
 .mi img, .mii { width:36px; height:36px; border-radius:8px; object-fit:cover; flex:none; background:${C.surface2}; display:flex; align-items:center; justify-content:center; }
 .mii ha-icon { --mdc-icon-size:20px; color:${C.muted}; }
-.mi span { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:15px; }
+.mi span:not(.mii) { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:15px; }
 .mi .pl { --mdc-icon-size:20px; color:${C.amber}; }
 .spks { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; margin-bottom:28px; }
 .spk { background:${C.surface2}; border:1px solid ${C.line}; border-radius:14px; padding:12px 14px; display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
