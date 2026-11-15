@@ -26,7 +26,7 @@ const TABS = [
   { id: "forside", name: "Forside", icon: "mdi:home-outline" },
   { id: "lys", name: "Lys", icon: "mdi:lightbulb-group-outline" },
   { id: "musik", name: "Musik", icon: "mdi:music" },
-  { id: "smart", name: "Smart enheder", icon: "mdi:power-socket-eu" },
+  { id: "smart", name: "Smart enheder", icon: "mdi:robot-vacuum" },
 ];
 const WEATHER = {
   "clear-night": "Klart", cloudy: "Overskyet", fog: "Tåge", hail: "Hagl", lightning: "Torden",
@@ -572,8 +572,9 @@ class HjemDashboardCard extends HTMLElement {
 
     if (!this._tab) { try { this._tab = localStorage.getItem("hjem-tab") || "forside"; } catch (e) { this._tab = "forside"; } }
     const tab = TABS.some((x) => x.id === this._tab) ? this._tab : "forside";
-    const lysOn = this._rooms().filter((r) => this._st(r.id) && this._st(r.id).state === "on").length;
-    const smartOn = this._plugs().filter((p) => this._st(p.id) && this._st(p.id).state === "on").length;
+    const lysOn = [...this._rooms(), ...this._plugs()].filter((r) => this._st(r.id) && this._st(r.id).state === "on").length;
+    const vacS = this._st(this._vac());
+    const smartOn = vacS && ["cleaning", "returning"].includes(vacS.state) ? 1 : 0;
     const playing = this._speakers().some((x) => this._st(x.id).state === "playing");
 
     const ae = this.shadowRoot.activeElement;
@@ -712,7 +713,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
   </div>
 
   <nav class="tabs" role="tablist">${TABS.map((x) => `<button class="tab ${tab === x.id ? "on" : ""}" data-tab="${x.id}" role="tab" aria-selected="${tab === x.id}">
-    <ha-icon icon="${x.icon}"></ha-icon><span>${x.name}</span>${x.id === "lys" && lysOn ? `<i class="cnt">${lysOn}</i>` : x.id === "musik" && playing ? `<i class="dot"></i>` : x.id === "smart" && smartOn ? `<i class="cnt">${smartOn}</i>` : ""}</button>`).join("")}</nav>
+    <ha-icon icon="${x.icon}"></ha-icon><span>${x.name}</span>${x.id === "lys" && lysOn ? `<i class="cnt">${lysOn}</i>` : x.id === "musik" && playing ? `<i class="dot"></i>` : x.id === "smart" && smartOn ? `<i class="dot"></i>` : ""}</button>`).join("")}</nav>
 
   ${tab === "forside" ? `
   <div class="cards">
@@ -742,19 +743,19 @@ button { font:inherit; color:inherit; cursor:pointer; }
     ${gaest ? `<button class="act ${gaestOn ? "active" : ""}" data-action="gaester"><ha-icon icon="mdi:account-group"></ha-icon>Gæster ${gaestOn ? "til" : "fra"}</button>` : ""}
     ${this._speakers().length ? `<button class="act" data-action="musik"><ha-icon icon="mdi:music"></ha-icon>Vælg musik</button>` : ""}
   </div>
-  <div class="foot">Lys, musik og smarte enheder finder du i fanerne øverst.</div>` : ""}
+  <div class="foot">Lys (også på kontakterne), musik og støvsuger finder du i fanerne øverst.</div>` : ""}
 
   ${tab === "lys" ? `
   <h2>Rum</h2>
   <div class="rooms">${rooms}</div>
-  <div class="foot">Tryk på et rum for at tænde eller slukke. Hold et rum nede for lysstyrke og de enkelte lamper.</div>` : ""}
+  ${plugs ? `<h2>Lys på kontakter</h2><div class="rooms">${plugs}</div>` : ""}
+  <div class="foot">Tryk på et rum eller en kontakt for at tænde eller slukke. Hold et rum nede for lysstyrke og de enkelte lamper.</div>` : ""}
 
   ${tab === "musik" ? this._sonosHtml() : ""}
 
   ${tab === "smart" ? `
-  ${plugs ? `<h2>Kontakter</h2><div class="rooms">${plugs}</div>` : ""}
   ${this._vacHtml()}
-  <div class="foot">Tryk på en kontakt for at tænde eller slukke. Hold støvsugeren nede for kort, indstillinger og vedligehold.</div>` : ""}
+  <div class="foot">Hold støvsugeren nede for kort, indstillinger og vedligehold.</div>` : ""}
 </div></div>${this._popupHtml()}`;
     if (keepSearch) {
       const s = this.shadowRoot.querySelector(".srch");
